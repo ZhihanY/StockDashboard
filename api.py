@@ -70,8 +70,8 @@ class StockDataAPI:
                           period: str, adjust: str) -> pd.DataFrame:
         """获取上海证券交易所数据"""
         # 确保股票代码格式正确
-        if not symbol.endswith('.SH'):
-            symbol = f"{symbol}.SH"
+        # if not symbol.endswith('.SH'):
+        #     symbol = f"{symbol}.SH"
         
         # 获取股票历史数据
         df = ak.stock_zh_a_hist(symbol=symbol, period=period, 
@@ -85,8 +85,8 @@ class StockDataAPI:
                           period: str, adjust: str) -> pd.DataFrame:
         """获取深圳证券交易所数据"""
         # 确保股票代码格式正确
-        if not symbol.endswith('.SZ'):
-            symbol = f"{symbol}.SZ"
+        # if not symbol.endswith('.SZ'):
+        #     symbol = f"{symbol}.SZ"
         
         # 获取股票历史数据
         df = ak.stock_zh_a_hist(symbol=symbol, period=period,
@@ -100,8 +100,8 @@ class StockDataAPI:
                          period: str, adjust: str) -> pd.DataFrame:
         """获取创业板数据"""
         # 确保股票代码格式正确
-        if not symbol.endswith('.SZ'):
-            symbol = f"{symbol}.SZ"
+        # if not symbol.endswith('.SZ'):
+        #     symbol = f"{symbol}.SZ"
         
         # 获取股票历史数据
         df = ak.stock_zh_a_hist(symbol=symbol, period=period,
@@ -242,6 +242,114 @@ class StockDataAPI:
             return None
 
 
+# ===== 基金相关 =====
+    def get_fund_nav(self,
+                     fund_code: str,
+                     start_date: Optional[str] = None,
+                     end_date: Optional[str] = None,
+                     indicator: str = "单位净值走势") -> Optional[pd.DataFrame]:
+        """
+        获取开放式基金净值时间序列
+        fund_code: 基金代码，如 110022
+        indicator: "单位净值走势" 或 "累计净值走势"
+        返回列通常包含：['日期', '单位净值', '累计净值', '涨跌幅']（视 indicator 而定）
+        """
+        try:
+            df = ak.fund_open_fund_info_em(symbol=fund_code, indicator=indicator)
+            if df is None or df.empty:
+                return df
+            # 统一日期列名
+            if '日期' not in df.columns:
+                for cand in ['净值日期', 'date', 'Date', '净值时间']:
+                    if cand in df.columns:
+                        df.rename(columns={cand: '日期'}, inplace=True)
+                        break
+            # 统一净值列名（尽可能保留原列，同时提供标准化列便于后续处理）
+            if '单位净值' not in df.columns and 'nav' in df.columns:
+                df.rename(columns={'nav': '单位净值'}, inplace=True)
+            if '累计净值' not in df.columns and 'acc_nav' in df.columns:
+                df.rename(columns={'acc_nav': '累计净值'}, inplace=True)
+            # 类型转换与时间筛选
+            if '日期' in df.columns:
+                df['日期'] = pd.to_datetime(df['日期'], errors='coerce')
+            for col in ['单位净值', '累计净值']:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+            if start_date and '日期' in df.columns:
+                df = df[df['日期'] >= pd.to_datetime(start_date)]
+            if end_date and '日期' in df.columns:
+                df = df[df['日期'] <= pd.to_datetime(end_date)]
+            if '日期' in df.columns:
+                df = df.sort_values('日期').reset_index(drop=True)
+            return df
+        except Exception as e:
+            print(f"获取基金净值失败: {str(e)}")
+            return None
+
+    def get_open_fund_daily_list(self) -> Optional[pd.DataFrame]:
+        """
+        获取开放式基金日行情列表（快照）
+        """
+        try:
+            df = ak.fund_open_fund_daily_em()
+            return df
+        except Exception as e:
+            print(f"获取基金列表失败: {str(e)}")
+            return None
+
+    def get_index_history(self,
+                          symbol: str,
+                          start_date: Optional[str] = None,
+                          end_date: Optional[str] = None,
+                          period: str = 'daily') -> Optional[pd.DataFrame]:
+        """
+        获取常用A股指数历史行情（用于基金基准）
+        symbol 需为 eastmoney 样式：如 'sh000300', 'sh000016', 'sh000905', 'sh000852', 'sz399006'
+        返回包含统一的 '日期'、'收盘' 列
+        """
+        try:
+            df = ak.stock_zh_index_daily(symbol=symbol)
+            if df is None or df.empty:
+                return df
+            # 统一列
+            if 'date' in df.columns:
+                df.rename(columns={'date': '日期'}, inplace=True)
+                df['日期'] = pd.to_datetime(df['日期'])
+            if 'close' in df.columns:
+                df.rename(columns={'close': '收盘'}, inplace=True)
+                df['收盘'] = pd.to_numeric(df['收盘'], errors='coerce')
+            # 时间筛选
+            if start_date:
+                df = df[df['日期'] >= pd.to_datetime(start_date)]
+            if end_date:
+                df = df[df['日期'] <= pd.to_datetime(end_date)]
+            # 排序
+            df = df.sort_values('日期').reset_index(drop=True)
+            return df[['日期', '收盘']]
+        except Exception as e:
+            print(f"获取指数行情失败: {str(e)}")
+            return None
+
+    def get_index_history_by_name(self,
+                                  name: str,
+                                  start_date: Optional[str] = None,
+                                  end_date: Optional[str] = None) -> Optional[pd.DataFrame]:
+        """
+        按常见名称获取指数：上证50、沪深300、中证500、中证1000、创业板指
+        """
+        name_to_symbol = {
+            '上证50': 'sh000016',
+            '沪深300': 'sh000300',
+            '中证500': 'sh000905',
+            '中证1000': 'sh000852',
+            '创业板指': 'sz399006',
+        }
+        symbol = name_to_symbol.get(name)
+        if symbol is None:
+            print(f"不支持的指数名称: {name}")
+            return None
+        return self.get_index_history(symbol=symbol, start_date=start_date, end_date=end_date)
+
 # 便捷函数
 def get_stock_data(symbol: str, 
                   market: str = 'sh',
@@ -297,44 +405,44 @@ def get_realtime_data(symbol: str, market: str = 'sh') -> Optional[pd.DataFrame]
 
 
 # 使用示例
-if __name__ == "__main__":
-    # 创建API实例
-    api = StockDataAPI()
+# if __name__ == "__main__":
+#     # 创建API实例
+#     api = StockDataAPI()
     
-    # 示例1：获取上证指数数据
-    print("=== 获取上证指数数据 ===")
-    sh_data = api.get_stock_data('000001', 'sh', '2024-01-01', '2024-12-31')
-    if sh_data is not None:
-        print(f"上证指数数据形状: {sh_data.shape}")
-        print(sh_data.head())
+#     # 示例1：获取上证指数数据
+#     print("=== 获取上证指数数据 ===")
+#     sh_data = api.get_stock_data('000001', 'sh', '2024-01-01', '2024-12-31')
+#     if sh_data is not None:
+#         print(f"上证指数数据形状: {sh_data.shape}")
+#         print(sh_data.head())
     
-    # 示例2：获取深证成指数据
-    print("\n=== 获取深证成指数据 ===")
-    sz_data = api.get_stock_data('399001', 'sz', '2024-01-01', '2024-12-31')
-    if sz_data is not None:
-        print(f"深证成指数据形状: {sz_data.shape}")
-        print(sz_data.head())
+#     # 示例2：获取深证成指数据
+#     print("\n=== 获取深证成指数据 ===")
+#     sz_data = api.get_stock_data('399001', 'sz', '2024-01-01', '2024-12-31')
+#     if sz_data is not None:
+#         print(f"深证成指数据形状: {sz_data.shape}")
+#         print(sz_data.head())
     
-    # 示例3：获取创业板指数据
-    print("\n=== 获取创业板指数据 ===")
-    cyb_data = api.get_stock_data('399006', 'cyb', '2024-01-01', '2024-12-31')
-    if cyb_data is not None:
-        print(f"创业板指数据形状: {cyb_data.shape}")
-        print(cyb_data.head())
+#     # 示例3：获取创业板指数据
+#     print("\n=== 获取创业板指数据 ===")
+#     cyb_data = api.get_stock_data('399006', 'cyb', '2024-01-01', '2024-12-31')
+#     if cyb_data is not None:
+#         print(f"创业板指数据形状: {cyb_data.shape}")
+#         print(cyb_data.head())
     
-    # 示例4：获取美股数据（苹果公司）
-    print("\n=== 获取美股数据（苹果公司）===")
-    us_data = api.get_stock_data('AAPL', 'us', '2024-01-01', '2024-12-31')
-    if us_data is not None:
-        print(f"苹果公司数据形状: {us_data.shape}")
-        print(us_data.head())
+#     # 示例4：获取美股数据（苹果公司）
+#     print("\n=== 获取美股数据（苹果公司）===")
+#     us_data = api.get_stock_data('AAPL', 'us', '2024-01-01', '2024-12-31')
+#     if us_data is not None:
+#         print(f"苹果公司数据形状: {us_data.shape}")
+#         print(us_data.head())
     
-    # 示例5：获取市场股票列表
-    print("\n=== 获取上证A股列表 ===")
-    sh_list = api.get_market_list('sh')
-    if sh_list is not None:
-        print(f"上证A股数量: {len(sh_list)}")
-        print(sh_list.head())
+#     # 示例5：获取市场股票列表
+#     print("\n=== 获取上证A股列表 ===")
+#     sh_list = api.get_market_list('sh')
+#     if sh_list is not None:
+#         print(f"上证A股数量: {len(sh_list)}")
+#         print(sh_list.head())
 
 
 

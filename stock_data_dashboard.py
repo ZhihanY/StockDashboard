@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
-from api import StockDataAPI, get_stock_data, get_market_list
+from api import StockDataAPI, get_stock_data, get_market_list, get_screener_data
 
 
 #"""主函数"""
@@ -78,7 +78,7 @@ adjust = st.sidebar.selectbox(
 )
 
 # 主内容区域
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 股票数据", "📋 市场列表", "📈 图表分析", "🏦 基金数据", "⭐ 自选", "ℹ️ 使用说明"])
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 股票数据", "📋 市场列表", "📈 图表分析", "🏦 基金数据", "⭐ 自选", "🔍 股票筛选器", "ℹ️ 使用说明"])
 
 with tab1:
     st.header("股票数据")
@@ -438,6 +438,100 @@ with tab5:
                 st.error(f"计算失败: {e}")
 
 with tab6:
+    st.header("股票筛选器")
+    st.markdown("根据您设定的条件筛选股票")
+
+    # 筛选条件输入
+    st.subheader("筛选条件")
+    
+    screener_market = st.selectbox(
+        "选择市场进行筛选",
+        options=['sh', 'sz', 'cyb', 'us'],
+        format_func=lambda x: {
+            'sh': '上证',
+            'sz': '深证', 
+            'cyb': '创业板',
+            'us': '美股'
+        }[x],
+        key='screener_market'
+    )
+
+    # 时间量级选择
+    screener_period = st.selectbox(
+        "时间量级 (目前仅影响数据获取，筛选基于实时数据)",
+        options=['daily', 'weekly', 'monthly'],
+        format_func=lambda x: {
+            'daily': '日线',
+            'weekly': '周线',
+            'monthly': '月线'
+        }[x],
+        key='screener_period'
+    )
+
+    col_price, col_change = st.columns(2)
+    with col_price:
+        min_price = st.number_input("当前价格 (Min)", value=0.0, step=0.1, key='min_price')
+        max_price = st.number_input("当前价格 (Max)", value=10000.0, step=0.1, key='max_price')
+    with col_change:
+        min_change = st.number_input("涨跌幅 (%) (Min)", value=-100.0, step=0.1, key='min_change')
+        max_change = st.number_input("涨跌幅 (%) (Max)", value=100.0, step=0.1, key='max_change')
+
+    col_marketcap, col_volume = st.columns(2)
+    with col_marketcap:
+        min_marketcap = st.number_input("当前市值 (亿) (Min)", value=0.0, step=1.0, key='min_marketcap')
+        max_marketcap = st.number_input("当前市值 (亿) (Max)", value=100000.0, step=1.0, key='max_marketcap')
+    with col_volume:
+        min_volume = st.number_input("交易量 (手) (Min)", value=0.0, step=1.0, key='min_volume')
+        max_volume = st.number_input("交易量 (手) (Max)", value=100000000.0, step=1.0, key='max_volume')
+
+    col_pe, col_roe = st.columns(2)
+    with col_pe:
+        min_pe = st.number_input("当前P/E (Min)", value=0.0, step=0.1, key='min_pe')
+        max_pe = st.number_input("当前P/E (Max)", value=1000.0, step=0.1, key='max_pe')
+    with col_roe:
+        st.info("营收增长 (暂不支持)")
+        st.info("ROE (trailing 12 month) (暂不支持)")
+        # min_revenue_growth = st.number_input("营收增长 (%) (Min)", value=-100.0, step=0.1, key='min_revenue_growth')
+        # max_revenue_growth = st.number_input("营收增长 (%) (Max)", value=1000.0, step=0.1, key='max_revenue_growth')
+        # min_roe = st.number_input("ROE (trailing 12 month) (%) (Min)", value=-100.0, step=0.1, key='min_roe')
+        # max_roe = st.number_input("ROE (trailing 12 month) (%) (Max)", value=100.0, step=0.1, key='max_roe')
+
+    if st.button("开始筛选", type="primary", key='start_screener'):
+        with st.spinner("正在获取并筛选数据..."):
+            screener_data = get_screener_data(market=screener_market)
+            
+            if screener_data is not None and not screener_data.empty:
+                filtered_data = screener_data.copy()
+                
+                # 应用筛选条件
+                filtered_data = filtered_data[
+                    (filtered_data['当前价格'] >= min_price) & 
+                    (filtered_data['当前价格'] <= max_price)    
+                ]
+                filtered_data = filtered_data[
+                    (filtered_data['涨跌幅'] >= min_change) & 
+                    (filtered_data['涨跌幅'] <= max_change)
+                ]
+                # 市值单位转换：akshare返回的总市值是亿元，这里用户输入也是亿
+                filtered_data = filtered_data[
+                    (filtered_data['当前市值'] >= min_marketcap) & 
+                    (filtered_data['当前市值'] <= max_marketcap)
+                ]
+                filtered_data = filtered_data[
+                    (filtered_data['交易量'] >= min_volume) & 
+                    (filtered_data['交易量'] <= max_volume)
+                ]
+                filtered_data = filtered_data[
+                    (filtered_data['当前P/E'] >= min_pe) & 
+                    (filtered_data['当前P/E'] <= max_pe)
+                ]
+                
+                st.success(f"筛选完成，找到 {len(filtered_data)} 只股票")
+                st.dataframe(filtered_data, use_container_width=True)
+            else:
+                st.error("获取筛选数据失败，请检查市场类型或稍后再试")
+
+with tab7:
     st.markdown("""
     ### 📖 功能说明
 

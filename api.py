@@ -241,6 +241,55 @@ class StockDataAPI:
             print(f"获取实时数据失败: {str(e)}")
             return None
 
+    def get_screener_data(self, market: str = 'sh') -> Optional[pd.DataFrame]:
+        """
+        获取用于股票筛选器的实时数据，包含当前价格、涨跌幅、总市值、市盈率等
+        
+        Args:
+            market: 市场类型 ('sh', 'sz', 'cyb', 'us')
+        
+        Returns:
+            DataFrame: 包含筛选所需数据的DataFrame
+        """
+        try:
+            df = None
+            if market == 'sh':
+                df = ak.stock_sh_a_spot_em()
+            elif market == 'sz':
+                df = ak.stock_sz_a_spot_em()
+            elif market == 'cyb':
+                df = ak.stock_cy_a_spot_em()
+            elif market == 'us':
+                df = ak.stock_us_spot_em()
+            else:
+                raise ValueError(f"不支持的市场类型: {market}")
+            
+            if df is not None and not df.empty:
+                # 统一列名以便筛选
+                column_mapping = {
+                    '最新价': '当前价格',
+                    '涨跌幅': '涨跌幅',
+                    '总市值': '当前市值',
+                    '成交量': '交易量',
+                    '市盈率-动态': '当前P/E',
+                    '代码': '股票代码',
+                    '名称': '股票名称'
+                }
+                df.rename(columns=column_mapping, inplace=True)
+                
+                # 确保数值列为float类型
+                numeric_cols = ['当前价格', '涨跌幅', '当前市值', '交易量', '当前P/E']
+                for col in numeric_cols:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
+                
+                return df[['股票代码', '股票名称', '当前价格', '涨跌幅', '当前市值', '交易量', '当前P/E']]
+            return None
+            
+        except Exception as e:
+            print(f"获取筛选数据失败: {str(e)}")
+            return None
+
 
 # ===== 基金相关 =====
     def get_fund_nav(self,
@@ -403,6 +452,13 @@ def get_realtime_data(symbol: str, market: str = 'sh') -> Optional[pd.DataFrame]
     api = StockDataAPI()
     return api.get_realtime_data(symbol, market)
 
+def get_screener_data(market: str = 'sh') -> Optional[pd.DataFrame]:
+    """
+    便捷函数：获取用于股票筛选器的实时数据
+    """
+    api = StockDataAPI()
+    return api.get_screener_data(market)
+
 
 # 使用示例
 # if __name__ == "__main__":
@@ -443,8 +499,3 @@ def get_realtime_data(symbol: str, market: str = 'sh') -> Optional[pd.DataFrame]
 #     if sh_list is not None:
 #         print(f"上证A股数量: {len(sh_list)}")
 #         print(sh_list.head())
-
-
-
-
-

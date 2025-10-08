@@ -3,8 +3,12 @@ import pandas as pd
 from datetime import datetime, timedelta
 from typing import Optional, Union
 import warnings
-warnings.filterwarnings('ignore')
+#from tqdm import tqdm
+import requests # Added for Alpha Vantage API calls
+import json # Added for Alpha Vantage API calls
 
+warnings.filterwarnings('ignore')
+#tqdm.disable = True
 
 class StockDataAPI:
     """股票数据获取API类，支持上证、深证、创业板、美股数据获取"""
@@ -59,6 +63,8 @@ class StockDataAPI:
                 return self._get_chinext_data(symbol, start_date, end_date, period, adjust)
             elif market == 'us':
                 return self._get_us_data(symbol, start_date, end_date, period, adjust)
+            elif market == 'us2':
+                return self._get_us_data_sn(symbol, adjust)
             else:
                 raise ValueError(f"不支持的市场类型: {market}")
                 
@@ -117,15 +123,43 @@ class StockDataAPI:
         # 转换日期格式
         start_date_us = f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:8]}"
         end_date_us = f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:8]}"
-        
-        # 获取美股历史数据
-        df = ak.stock_us_hist(symbol=symbol, period=period,
-                             start_date=start_date_us, end_date=end_date_us, adjust=adjust)
-        
-        # 数据清洗和格式化
-        df = self._format_dataframe(df, '美股')
-        return df
+
+        # 仅支持三种前缀：105. / 106. / 107.
+        user_raw = (symbol or "").strip().upper()
+        base = user_raw.split('.')[-1] if '.' in user_raw else user_raw
+        # 允许点/横杠两种写法
+        forms = {base, base.replace('.', '-'), base.replace('-', '.')}
+        cand_hist = []
+        for form in forms:
+            for px in ["105", "106", "107"]:
+                cand_hist.append(f"{px}.{form}")
+        # 去重并尝试
+        tried = set()
+        for cand in cand_hist:
+            sc = cand.strip()
+            if not sc or sc in tried:
+                continue
+            tried.add(sc)
+            try:
+                df = ak.stock_us_hist(symbol=sc, period=period,
+                                      start_date=start_date_us, end_date=end_date_us, adjust=adjust)
+                #df = ak.stock_us_daily(symbol=sc)
+                if df is not None and not df.empty:
+                    return self._format_dataframe(df, '美股')
+            except Exception:
+                continue
+
+        # 未获取到
+        return pd.DataFrame()
     
+    def _get_us_data_sn(self, symbol: str, adjust: str):
+        try:
+            df = ak.stock_us_daily(symbol=symbol, adjust=adjust)
+            if df is not None and not df.empty:
+                return self._format_dataframe(df, '美股')
+        except Exception as e:
+            print(e)
+
     def _format_dataframe(self, df: pd.DataFrame, market: str) -> pd.DataFrame:
         """格式化DataFrame"""
         if df is None or df.empty:
@@ -290,6 +324,79 @@ class StockDataAPI:
             print(f"获取筛选数据失败: {str(e)}")
             return None
 
+    def _calculate_ema(self, df: pd.DataFrame, period: int = 10) -> pd.DataFrame:
+        """
+        计算指数移动平均线 (Exponential Moving Average, EMA)
+        要求DataFrame包含 '收盘' 列
+        """
+        if df is None or df.empty or '收盘' not in df.columns:
+            return df
+        
+        df[f'EMA_{period}'] = df['收盘'].ewm(span=period, adjust=False).mean()
+        
+        return df
+
+    def _get_time_series_intraday(self,
+                                 symbol: str,
+                                 interval: str = '15min',
+                                 outputsize: str = 'compact') -> Optional[pd.DataFrame]:
+        """
+        获取股票的日内交易数据 (Alpha Vantage: TIME_SERIES_INTRADAY)
+
+        Args:
+            symbol: 股票代码 (e.g., 'IBM')
+            interval: 时间间隔 ('1min', '5min', '15min', '30min', '60min')
+            outputsize: 数据量 ('compact' for last 100 data points, 'full' for full-length)
+            api_key: Alpha Vantage API 密钥
+
+        Returns:
+            DataFrame: 包含日内交易数据的DataFrame
+        """
+        global alpha_api
+        if not alpha_api or alpha_api == 'YOUR_ALPHA_VANTAGE_API_KEY':
+            print("错误: Alpha Vantage API 密钥未提供或为默认值。请设置您的API密钥。")
+            return None
+
+        base_url = "https://www.alphavantage.co/query"
+        params = {
+            "function": "TIME_SERIES_INTRADAY",
+            "symbol": symbol,
+            "interval": interval,
+            "outputsize": outputsize,
+            "apikey": alpha_api,
+            "datatype": "json"
+        }
+
+        try:
+            response = requests.get(base_url, params=params)
+            response.raise_for_status() # 检查HTTP错误
+            data = response.json()
+
+            if "Time Series (Intraday)" not in data:
+                print(f"获取 {symbol} 的日内数据失败: {data.get('Note', '未知错误')}")
+                return None
+
+            time_series = data["Time Series (Intraday)"]
+            df = pd.DataFrame.from_dict(time_series, orient='index')
+            df = df.astype(float) # 将所有数据转换为浮点数
+
+            # 格式化列名
+            df.columns = ['开盘', '最高', '最低', '收盘', '成交量']
+            df.index.name = '日期时间'
+            df.index = pd.to_datetime(df.index)
+            df = df.sort_index()
+
+            return df
+
+        except requests.exceptions.RequestException as e:
+            print(f"请求 Alpha Vantage API 失败: {e}")
+            return None
+        except json.JSONDecodeError:
+            print("解析 Alpha Vantage API 响应失败。")
+            return None
+        except Exception as e:
+            print(f"获取日内数据时发生未知错误: {e}")
+            return None
 
 # ===== 基金相关 =====
     def get_fund_nav(self,
@@ -460,6 +567,37 @@ def get_screener_data(market: str = 'sh') -> Optional[pd.DataFrame]:
     return api.get_screener_data(market)
 
 
+def get_time_series_intraday(symbol: str,
+                             interval: str = '15min',
+                             outputsize: str = 'compact') -> Optional[pd.DataFrame]:
+    """
+    便捷函数：获取股票的日内交易数据 (Alpha Vantage: TIME_SERIES_INTRADAY)
+    """
+    api = StockDataAPI()
+    return api._get_time_series_intraday(symbol, interval, outputsize)
+
+
+def calculate_bollinger_bands(df: pd.DataFrame, period: int = 20, std_dev: float = 2.0) -> pd.DataFrame:
+    """
+    计算布林带 (Bollinger Bands)
+    要求DataFrame包含 '收盘' 列
+    """
+    if df is None or df.empty or 'close' not in df.columns:
+        return df
+
+    # 计算SMA (Middle Band)
+    df[f'SMA_{period}'] = df['close'].rolling(window=period).mean()
+    # 计算标准差
+    df[f'STD_{period}'] = df['close'].rolling(window=period).std()
+    # 计算上轨和下轨
+    df[f'UpperBB_{period}_{std_dev}'] = df[f'SMA_{period}'] + (df[f'STD_{period}'] * std_dev)
+    df[f'LowerBB_{period}_{std_dev}'] = df[f'SMA_{period}'] - (df[f'STD_{period}'] * std_dev)
+    
+    #print("函数内新增的列：", [col for col in df.columns if col in [f'SMA_{period}', f'STD_{period}', f'UpperBB_{period}_{std_dev}', f'LowerBB_{period}_{std_dev}']])
+    return df
+
+                            
+
 # 使用示例
 # if __name__ == "__main__":
 #     # 创建API实例
@@ -499,3 +637,12 @@ def get_screener_data(market: str = 'sh') -> Optional[pd.DataFrame]:
 #     if sh_list is not None:
 #         print(f"上证A股数量: {len(sh_list)}")
 #         print(sh_list.head())
+
+#     # 示例6：获取日内交易数据 (Alpha Vantage)
+#     print("\n=== 获取日内交易数据 (IBM, 5min) ===")
+#     intraday_data = get_time_series_intraday(symbol='IBM', interval='5min', outputsize='compact')
+#     if intraday_data is not None:
+#         print(f"IBM 日内数据形状: {intraday_data.shape}")
+#         print(intraday_data.head())
+#     else:
+#         print("未能获取 IBM 的日内交易数据。请检查API密钥和请求参数。")
